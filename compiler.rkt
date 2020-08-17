@@ -138,22 +138,123 @@
 
 ;;-------------------------------------------------------------------------------
 
-;; explicate-control : R1 -> C0
-(define (explicate-control p)
-  p)
+;; CLabel = Symbol
+
+;; _next-unqiue-block-num : Integer
+(define _next-unqiue-block-num 0)
+
+;; next-unique-block-label :: CLabel
+(define (next-unique-block-label)
+  (define next (string->symbol (string-append "_" (number->string _next-unqiue-block-num))))
+  (set! _next-unqiue-block-num (+ _next-unqiue-block-num 1))
+  next)
+
+;; maps C block labels to C-tails 
+;; block-label-to-tail : HashMap CLabel CTail
+(define block-label-to-tail (make-hash))
+
+;; Insert the block label and tail into the mapping of labels to tails.
+;; insert-block! : CLabel -> CTail -> ()
+(define (insert-block! label tail)
+  (hash-set! block-label-to-tail label tail))
+
+;; Convert an R operator argument to a C term. Only works for S val
+;; terms and var terms since the uniquify pass should have converted all
+;; operator args into val or var terms.
+;; (This isn't terribly useful now but will be if I convert to typed Racket.)
+;; r-prim-term->c-term :: RTerm -> CArg
+(define (r-prim-term->c-term trm)
+  (match trm
+    [(? symbol?) trm]
+    [(? integer?) trm]
+    [_ (error "r-prim-term->c-term: input must be a val or var R-term")]))
+  
+;; Explicate the "tail" part of an R term. The "tail" of an R term is
+;; the part of the term that should be executed last.
+;; explicate-control-tail : RTerm -> (CTerm -> CTail) -> CTail
+(define (explicate-control-tail r-trm do-after)
+  (match r-trm
+    ; primitives and vars
+    [(? symbol?) (do-after (r-prim-term->c-term r-trm))]
+    [(? integer?) (do-after (r-prim-term->c-term r-trm))]
+    ; operators
+    [`(read) (do-after `(read))]
+    [`(+ ,t1 ,t2) (do-after `(+ ,(r-prim-term->c-term t1) ,(r-prim-term->c-term t2)))]
+    [`(- ,t) (do-after `(- ,(r-prim-term->c-term t)))]
+    ; language constructs
+    [`(let ([,v ,bnd]) ,bdy)
+      (define do-after-bnd (explicate-control-tail bdy do-after))
+      (explicate-control-assign bnd v do-after-bnd)]
+    ))
+
+;; Explicate the binding term of a let term.
+;; explicate-control-assign : RTerm -> CVar -> CTail -> CTail
+(define (explicate-control-assign r-bnd assign-to tail)
+  (match r-bnd
+    ; primitives and vars
+    [(? symbol?) `(seq (assign ,assign-to ,r-bnd) ,tail)]
+    [(? integer?) `(seq (assign ,assign-to ,r-bnd) ,tail)]
+    ; operators
+    [`(read) `(seq (assign ,assign-to (read)) ,tail)]
+    [`(+ ,t1 ,t2)
+      (define assigned `(+ ,(r-prim-term->c-term t1) ,(r-prim-term->c-term t2)))
+      `(seq (assign ,assign-to ,assigned) ,tail)]
+    [`(- ,t)
+      (define assigned `(- ,(r-prim-term->c-term t)))
+      `(seq (assign ,assign-to ,assigned) ,tail)]
+    ; language constructs
+    [`(let ([,v ,bnd]) ,bdy)
+      (define bdy-tail
+        (explicate-control-tail bdy
+                                (λ (ctrm) `(seq (assign ,assign-to ,ctrm) ,tail))))
+      (explicate-control-assign bnd v bdy-tail)]
+    ))
+
+;; explicate-control-top : RTerm -> CLabel -> CTail
+(define (explicate-control-top trm label)
+  (define tail (explicate-control-tail trm (λ (ctrm) `(return ,ctrm))))
+  (insert-block! label tail)
+  tail)
+
+;; explicate-control : RProgram -> CProgram
+(define (explicate-control r-prog)
+  (match r-prog
+    [`(program ,info ,e)
+     (explicate-control-top e 'start)
+     `(program ,info ,(hash->list block-label-to-tail))]
+    ))
+
+(define expl-test-trm1
+  42)
+(define expl-test-prog1 `(program () ,expl-test-trm1))
+(define expl-test1 (explicate-control expl-test-prog1))
+
+(define explicate-test-trm
+  '(let ([y (let ([x1 20])
+                 (let ([x2 22])
+                      (+ x1 x2)))])
+        y))
+(define explicate-test-prog `(program () ,explicate-test-trm))
+
+;;-------------------------------------------------------------------------------
 
 ;; select-instructions : C0 -> pseudo-x86
 (define (select-instructions p)
   p)
 
+;;-------------------------------------------------------------------------------
+
 ;; assign-homes : pseudo-x86 -> pseudo-x86
 (define (assign-homes p)
   p)
+
+;;-------------------------------------------------------------------------------
 
 ;; patch-instructions : psuedo-x86 -> x86
 (define (patch-instructions p)
   p)
 
+;;-------------------------------------------------------------------------------
 ;; print-x86 : x86 -> string
 (define (print-x86 p)
   "todo - implement print-x86")
