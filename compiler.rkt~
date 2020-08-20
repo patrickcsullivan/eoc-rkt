@@ -16,7 +16,7 @@
 
 ;; next-unique-symbol :: Symbol
 (define (next-unique-symbol)
-  (define next (string->symbol (string-append "tmp." (number->string _next-unqiue))))
+  (define next (string->symbol (string-append "_" (number->string _next-unqiue))))
   (set! _next-unqiue (+ _next-unqiue 1))
   next)
 
@@ -216,42 +216,13 @@
   (insert-block! label tail)
   tail)
 
-;; c-stmt-uncover-locals : CStmt -> [CVar]
-(define (c-stmt-uncover-locals c-stmt)
-  (match c-stmt
-    [`(assign ,var ,_) `(,var)]
-   ))
-
-;; c-tail-uncover-locals : CTail -> [CVar]
-(define (c-tail-uncover-locals c-tail)
-  (match c-tail
-    [`(seq ,stmt ,tail)
-     (set-union
-      (c-stmt-uncover-locals stmt)
-      (c-tail-uncover-locals tail))]
-    [_ `()]))
-
-;; c-prog-uncover-locals : CProgram -> CProgram
-(define (c-prog-uncover-locals c-prog)
-  (match c-prog
-    [`(program ,info ,c-blocks)
-     (define locals (apply set-union (dict-map-vals c-blocks c-tail-uncover-locals)))
-     (define info+ (cons (cons 'locals locals) info))
-     `(program ,info+ ,c-blocks)]
-    ))
-
-(define (dict-map-vals dict proc)
-  (dict-map dict (λ (key val) (proc val))))
-
 ;; explicate-control : RProgram -> CProgram
 (define (explicate-control r-prog)
-  (define c-prog
-    (match r-prog
-      [`(program ,info ,e)
-       (explicate-control-top e 'start)
-       `(program ,info ,(hash->list block-label-to-tail))]
-      ))
-  (c-prog-uncover-locals c-prog))
+  (match r-prog
+    [`(program ,info ,e)
+     (explicate-control-top e 'start)
+     `(program ,info ,(hash->list block-label-to-tail))]
+    ))
 
 (define expl-test-trm1
   42)
@@ -263,110 +234,13 @@
                  (let ([x2 22])
                       (+ x1 x2)))])
         y))
-(define nested-lets-r `(program () ,explicate-test-trm))
+(define explicate-test-prog `(program () ,explicate-test-trm))
 
 ;;-------------------------------------------------------------------------------
 
-;; c-arg->px-arg : CArg -> PXArg
-(define (c-arg->px-arg a)
-  (match a
-    [(? symbol?) `(var ,a)]
-    [(? integer?) `(int ,a)]
-    ))
-
-;; px-arg-eq? : PXArg -> PXArg -> Bool
-(define (px-arg-eq? a1 a2)
-  (match* (a1 a2)
-    [(`(reg ,r1) `(reg ,r2)) (eq? r1 r2)]
-    [(_ _) (eq? a1 a2)]))
-
-;; assign-read-instrs : PXArg -> [PXInstr]
-(define (assign-read-instrs dst)
-  `((callq read_int)
-    (movq (reg rax) ,dst)))
-
-;; assign-arg-instrs : PXArg -> [PXInstr]
-(define (assign-arg-instrs src dst)
-  `((movq ,src ,dst)))
-
-;; assign-neg-instrs : PXArg -> [PXInstr]
-(define (assign-neg-instrs arg dst)
-  (if (px-arg-eq? arg dst)
-      `((negq ,dst))
-      `((movq ,arg ,dst)
-        (negq ,dst))))
-
-;; assign-add-instrs : PXArg -> [PXInstr]
-(define (assign-add-instrs arg1 arg2 dst)
-  (cond
-    [(px-arg-eq? arg1 dst)
-    `(addq ,arg2 ,dst)]
-    [(px-arg-eq? arg2 dst)
-    `(addq ,arg1 ,dst)]
-    [else
-     `((movq ,arg1 ,dst)
-       (addq ,arg2 ,dst))]))
-
-; eval-and-assign-instrs : PXArg -> CTerm -> [PInstr]
-(define (eval-and-assign-instrs px-dst c-trm)
-  (match c-trm
-    ; args
-    [(? symbol?)
-     (assign-arg-instrs (c-arg->px-arg c-trm) px-dst)]
-    [(? integer?)
-     (assign-arg-instrs (c-arg->px-arg c-trm) px-dst)]
-    ; operators
-    [`(read)
-     (assign-read-instrs px-dst)]
-    [`(+ ,a1 ,a2)
-     (assign-add-instrs (c-arg->px-arg a1) (c-arg->px-arg a2) px-dst)]
-    [`(- ,a)
-     (assign-neg-instrs (c-arg->px-arg a) px-dst)]
-  ))
-
-;; Convert the C statement into PX instructions.
-;; c-stmt->px-instrs : CStmt -> [PXInstr]
-(define (c-stmt->px-instrs stmt)
-  (match stmt
-    [`(assign ,var ,trm) (eval-and-assign-instrs (c-arg->px-arg var) trm)]
-   ))
-
-;; Convert the C tail into PX instructions that returns by jumping to the
-;; given label.
-;; c-tail->p-instrs : PXLabel -> CTail -> [PInstr]
-(define (c-tail->px-instrs jump-on-ret c-tail)
-  (match c-tail
-    [`(seq ,stmt ,tail)
-     (append
-      (c-stmt->px-instrs stmt)
-      (c-tail->px-instrs jump-on-ret tail))]
-    [`(return ,trm)
-     ;(eval-and-assign-instrs '(reg rax) trm)]
-     (append
-      (eval-and-assign-instrs '(reg rax) trm)
-      `((jmp ,jump-on-ret)))]
-   ))
-
-;; c-blocks->p-blocks : [(CLabel, CTail)] -> [(PXLabel, PXTail)]
-(define (c-blocks->px-blocks c-blocks)
-  (map
-   (λ (cb)
-     (match cb
-       [`(,label . ,tail)
-        (define instrs (c-tail->px-instrs 'conclusion tail))
-        (define block-info `())
-        (define block (append `(block ,block-info) instrs))
-        `(,label . ,block)]))
-   c-blocks))
-
-;; select-instructions : CProgram -> PXPorgram
-(define (select-instructions c-prog)
-  (match c-prog
-    [`(program ,info ,c-blocks)
-     `(program ,info ,(c-blocks->px-blocks c-blocks))]
-    ))
-
-(define my-test (select-instructions (explicate-control nested-lets-r)))
+;; select-instructions : C0 -> pseudo-x86
+(define (select-instructions p)
+  p)
 
 ;;-------------------------------------------------------------------------------
 
