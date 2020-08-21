@@ -370,9 +370,76 @@
 
 ;;-------------------------------------------------------------------------------
 
-;; assign-homes : pseudo-x86 -> pseudo-x86
+;; map-px-blocks : [(PXLabel, 'Block, [PXInstr])] -> ([PXInstr] -> [PXInstr]) -> [(PXLabel, 'Block, [PXInstr])]
+(define (map-px-blocks blocks proc)
+  (map (lambda (b)
+         (match b
+           [`(,label block ,b-info ,instrs ...)
+            (define instrs+ (proc instrs))
+            (append `(,label block ,b-info) instrs+)]))
+       blocks))
+
+;; replace-var-in-arg : PXArg -> PXArg
+(define (replace-var-in-arg var-to-arg arg)
+  (match arg
+    [`(var ,v) (dict-ref var-to-arg v)]
+    [_ arg]))
+
+;; replace-vars-in-instr : Map PXVar -> PXArg -> PXInstr -> PXInstr
+(define ((replace-vars-in-instr var-to-arg) instr)
+  (match instr
+    [`(addq ,src ,dst)
+     (define src+ (replace-var-in-arg var-to-arg src))
+     (define dst+ (replace-var-in-arg var-to-arg dst))
+     `(addq ,src+ ,dst+)]
+    [`(negq ,dst)
+     (define dst+ (replace-var-in-arg var-to-arg dst))
+     `(negq ,dst+)]
+    [`(movq ,src ,dst)
+     (define src+ (replace-var-in-arg var-to-arg src))
+     (define dst+ (replace-var-in-arg var-to-arg dst))
+     `(movq ,src+ ,dst+)]
+    [_ instr]
+    ))
+
+;; assign-var-homes : [PXVar] -> Map PXVar PXArg
+(define (assign-var-homes vars)
+  (for/list ([i (in-naturals)]
+             [v vars])
+    (define offset (* -8 (+ 1 i)))
+    (define home `(deref rbp ,offset))
+    (cons v home)))
+
+;; stack-size : [PXVar] -> Int
+(define (stack-size locals)
+  (define num-locals (length locals))
+  (cond
+    [(= 0 num-locals)
+     0]
+    [(= 0 (modulo 2 num-locals))
+     (* 8 num-locals)]
+    [else
+     (+ (* 8 num-locals) 8)]
+    ))
+
+;; assign-homes : PXProg -> PXProg
 (define (assign-homes p)
-  p)
+  (match p
+    [`(program ,info ,blocks)
+     (define locals (dict-ref info 'locals))
+     (define var-to-arg (assign-var-homes locals))
+     (define blocks+ (map-px-blocks blocks (lambda (instrs)
+                                             (map (replace-vars-in-instr var-to-arg) instrs))))
+     (define info+ (dict-set info 'stack-size (stack-size locals)))
+     `(program ,info+ ,blocks+)]
+    ))
+
+;(define my-test2 (assign-homes my-test))
+
+(define (run-compiler4 r)
+  (select-instructions (explicate-control (remove-complex-opera* (uniquify `(program () ,r))))))
+(define (run-compiler5 r)
+  (assign-homes (select-instructions (explicate-control (remove-complex-opera* (uniquify `(program () ,r)))))))
 
 ;;-------------------------------------------------------------------------------
 
