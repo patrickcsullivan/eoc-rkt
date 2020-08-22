@@ -366,13 +366,11 @@
      `(program ,info ,(c-blocks->px-blocks c-blocks))]
     ))
 
-(define my-test (select-instructions (explicate-control nested-lets-r)))
-
 ;;-------------------------------------------------------------------------------
 
 ;; map-px-blocks : [(PXLabel, 'Block, [PXInstr])] -> ([PXInstr] -> [PXInstr]) -> [(PXLabel, 'Block, [PXInstr])]
 (define (map-px-blocks blocks proc)
-  (map (lambda (b)
+  (map (λ (b)
          (match b
            [`(,label block ,b-info ,instrs ...)
             (define instrs+ (proc instrs))
@@ -428,7 +426,7 @@
     [`(program ,info ,blocks)
      (define locals (dict-ref info 'locals))
      (define var-to-arg (assign-var-homes locals))
-     (define blocks+ (map-px-blocks blocks (lambda (instrs)
+     (define blocks+ (map-px-blocks blocks (λ (instrs)
                                              (map (replace-vars-in-instr var-to-arg) instrs))))
      (define info+ (dict-set info 'stack-size (stack-size locals)))
      `(program ,info+ ,blocks+)]
@@ -441,11 +439,71 @@
 (define (run-compiler5 r)
   (assign-homes (select-instructions (explicate-control (remove-complex-opera* (uniquify `(program () ,r)))))))
 
+
+(define my-test (assign-homes (select-instructions (explicate-control nested-lets-r))))
+
 ;;-------------------------------------------------------------------------------
+
+;; Return true iff PXIR arg is a dereference.
+;; px-arg-is-deref? : PXArg -> Bool
+(define (px-arg-is-deref? arg)
+  (match arg
+    [`(deref ,_ ,_) #t]
+    [_ #f]
+    ))         
+
+;; If the given instruction is a movq with matching a source and destination
+;; then remove the instruction.
+;; patch-unneeded-movq : PXInstr -> [PXInstr]
+(define (patch-unneeded-movq instr)
+  (match instr
+    [`(movq ,src ,dst)
+     #:when (px-arg-eq? src dst)
+     `()]
+    [_
+     `(,instr)]
+    ))
+
+;; If the given instruction is allowed to have at most one memory reference
+;; argument then patch the instruction so that it adheres to this rule. 
+;; 
+;; In general if an instruction has a src and a dst argument that are both memory
+;; references we patch the instruction by moving the src into the RAX register. We
+;; then perform the original instruction using RAX as the src and the original dst
+;; argument as the dst.
+;; patch-double-ref : PXInstr -> [PXInstr]
+(define (patch-double-ref instr)
+  (match instr
+    [`(movq ,src ,dst)
+     #:when (and (px-arg-is-deref? src) (px-arg-is-deref? dst))
+     `((movq ,src (reg rax))
+       (movq (reg rax) ,dst))]
+    [`(addq ,src ,dst)
+     #:when (and (px-arg-is-deref? src) (px-arg-is-deref? dst))
+     `((movq ,src (reg rax))
+       (addq (reg rax) ,dst))]
+    [_
+     `(,instr)]
+    ))
+
+;; Apply the patch instruction to each instruction in the list of instructions.
+;; apply-instr-patch :: (PXInstr -> [PXInstr]) -> [PXInstr] -> [PXInstr]
+(define (apply-instr-patch proc instrs)
+  (append* (map proc instrs)))
+
+;; patch-instructions-in-block : [PXInstr] -> [PXInstr]
+(define (patch-instructions-in-block instrs)
+  (define instrs+ (apply-instr-patch patch-unneeded-movq instrs))
+  (define instrs++ (apply-instr-patch patch-double-ref instrs))
+  instrs++)
 
 ;; patch-instructions : psuedo-x86 -> x86
 (define (patch-instructions p)
-  p)
+  (match p
+    [`(program ,info ,blocks)
+     (define blocks+ (map-px-blocks blocks patch-instructions-in-block))
+     `(program ,info ,blocks+)]
+    ))
 
 ;;-------------------------------------------------------------------------------
 ;; print-x86 : x86 -> string
