@@ -368,7 +368,10 @@
 
 ;;-------------------------------------------------------------------------------
 
-;; map-px-blocks : [(PXLabel, 'Block, [PXInstr])] -> ([PXInstr] -> [PXInstr]) -> [(PXLabel, 'Block, [PXInstr])]
+;; map-px-blocks : [(PXLabel, 'Block, PXBlockInfo [PXInstr])]
+;;              -> ([PXInstr]
+;;              -> [PXInstr])
+;;              -> [(PXLabel, 'Block, PXBlockInfo, [PXInstr])]
 (define (map-px-blocks blocks proc)
   (map (λ (b)
          (match b
@@ -439,9 +442,6 @@
 (define (run-compiler5 r)
   (assign-homes (select-instructions (explicate-control (remove-complex-opera* (uniquify `(program () ,r)))))))
 
-
-(define my-test (assign-homes (select-instructions (explicate-control nested-lets-r))))
-
 ;;-------------------------------------------------------------------------------
 
 ;; Return true iff PXIR arg is a dereference.
@@ -506,6 +506,84 @@
     ))
 
 ;;-------------------------------------------------------------------------------
-;; print-x86 : x86 -> string
+
+(define (mk-main-block stack-space jump-to)
+  `(main
+    block
+    ()
+    (pushq (reg rbp))
+    (movq (reg rsp) (reg rbp))
+    (subq (int ,stack-space) (reg rsp))
+    (jmp ,jump-to)
+    ))
+
+(define (mk-conclusion-block stack-space)
+  `(conclusion
+    block
+    ()
+    (addq (int ,stack-space) (reg rsp))
+    (popq (reg rbp))
+    (retq)
+    ))
+
+(define (show-px-arg arg)
+  (match arg
+    [`(int ,n) (format "$~a" n)]
+    [`(reg ,r) (format "%~a" r)]
+    [`(deref ,r ,off) (format "~a(%~a)" off r)]
+    [`(var ,v) (format "<~a>" v)]
+    ))
+
+(define (show-px-instr instr)
+  (match instr
+    [`(addq ,src ,dst)
+     (format "addq ~a, ~a" (show-px-arg src) (show-px-arg dst))]
+    [`(subq ,src ,dst)
+     (format "subq ~a, ~a" (show-px-arg src) (show-px-arg dst))]
+    [`(negq ,dst)
+     (format "negq ~a" (show-px-arg dst))]
+    [`(movq ,src ,dst)
+     (format "movq ~a, ~a" (show-px-arg src) (show-px-arg dst))]
+    [`(pushq ,src)
+     (format "pushq ~a" (show-px-arg src))]
+    [`(popq ,dst)
+     (format "popq ~a" (show-px-arg dst))]
+    [`(jmp ,label)
+     (format "jmp ~a" label)]
+    [`(callq ,label)
+     (format "callq ~a" label)]
+    [`(retq)
+     "retq"]
+    ))
+
+(define (show-px-block b)
+  (match b
+    [`(,label block ,b-info ,instrs ...)
+     (string-append*
+      (format "~a:\n" label)
+      (map (λ (i) (format "    ~a\n" (show-px-instr i)))
+           instrs)
+      )]))
+
+(define (show-px-prog main-block conclusion-block prog-blocks)
+  (define blocks-str (string-append* (map show-px-block prog-blocks)))
+  (string-append
+   blocks-str
+   "\n"
+   "    .global main\n"
+   "\n"
+   (show-px-block main-block)
+   "\n"
+   (show-px-block conclusion-block)
+   ))
+  
+;; print-x86 : PXProg -> String
 (define (print-x86 p)
-  "todo - implement print-x86")
+  (match p
+    [`(program ,info ,blocks)
+     (define stack-size (dict-ref info 'stack-size))
+     (define main-block (mk-main-block stack-size 'start))
+     (define conclusion-block (mk-conclusion-block stack-size))
+     (show-px-prog main-block conclusion-block blocks)]))
+
+(define my-test (patch-instructions (assign-homes (select-instructions (explicate-control nested-lets-r)))))

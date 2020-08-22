@@ -16,10 +16,10 @@
      ("explicate control" ,explicate-control ,interp-C0)
      ("instruction selection" ,select-instructions ,R1-interp-x86)
      ("assign homes" ,assign-homes ,R1-interp-x86)
-     ;("patch instructions" ,patch-instructions ,R1-interp-x86)
-     ;("print x86" ,print-x86 #f)
+     ("patch instructions" ,patch-instructions ,R1-interp-x86)
+     ("print x86" ,print-x86 #f)
      ))
 
 (interp-tests "r1" #f r1-passes interp-R1 "r1" (tests-for "r1"))
-;(compiler-tests "r1" #f r1-passes "r1" (tests-for "r1"))
+(compiler-tests "r1" #f r1-passes "r1" (tests-for "r1"))
 
